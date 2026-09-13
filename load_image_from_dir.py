@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import glob
 import hashlib
 import mimetypes
@@ -127,6 +128,20 @@ async def minimaxutils_listdir(request):
 async def minimaxutils_resolve(request):
     """Resolve which file the node would load — keeps JS preview in sync with Python."""
     q = request.rel_url.query
+    file_path = (q.get("file") or "").strip()
+    if file_path:
+        safe = _safe_image_path(file_path)
+        if not safe:
+            return web.json_response({"count": 0, "index": 0, "file": None, "source": "file"})
+        return web.json_response(
+            {
+                "count": 1,
+                "index": 0,
+                "source": "file",
+                "file": {"name": os.path.basename(safe), "path": safe},
+            }
+        )
+
     directory = q.get("directory", "")
     pattern = q.get("pattern", "*")
     mode = q.get("mode", "sequential")
@@ -141,7 +156,7 @@ async def minimaxutils_resolve(request):
 
     paths = list_images(directory, pattern)
     if not paths:
-        return web.json_response({"count": 0, "index": 0, "file": None})
+        return web.json_response({"count": 0, "index": 0, "file": None, "source": "folder"})
 
     selected = resolve_index(mode, index, seed, len(paths))
     path = paths[selected]
@@ -149,7 +164,124 @@ async def minimaxutils_resolve(request):
         {
             "count": len(paths),
             "index": selected,
+            "source": "folder",
             "file": {"name": os.path.basename(path), "path": path},
+        }
+    )
+
+
+@PromptServer.instance.routes.get("/minimaxutils/pathinfo")
+async def minimaxutils_pathinfo(request):
+    """Classify a pasted path as image file, directory, or missing."""
+    raw = (request.rel_url.query.get("path") or "").strip().strip('"').strip("'")
+    if not raw:
+        return web.json_response({"ok": True, "type": "empty", "path": ""})
+    abs_path = os.path.abspath(os.path.expanduser(raw))
+    if os.path.isfile(abs_path) and _is_image_file(abs_path):
+        return web.json_response(
+            {
+                "ok": True,
+                "type": "file",
+                "path": abs_path,
+                "name": os.path.basename(abs_path),
+                "directory": os.path.dirname(abs_path),
+            }
+        )
+    if os.path.isdir(abs_path):
+        return web.json_response(
+            {
+                "ok": True,
+                "type": "dir",
+                "path": abs_path,
+                "directory": abs_path,
+            }
+        )
+    return web.json_response({"ok": False, "type": "missing", "path": abs_path})
+
+
+def _pick_image_dialog() -> str:
+    """Native OS file dialog on the ComfyUI server machine (local workflows)."""
+    # Prefer WinForms via PowerShell on Windows — tkinter often fails/headless in ComfyUI.
+    if os.name == "nt":
+        try:
+            import subprocess
+
+            ps = (
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "$f = New-Object System.Windows.Forms.OpenFileDialog; "
+                "$f.Title = 'Select image'; "
+                "$f.Filter = 'Images (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff)|"
+                "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff|All files (*.*)|*.*'; "
+                "$f.Multiselect = $false; "
+                "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
+                "{ [Console]::Out.Write($f.FileName) }"
+            )
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-STA", "-Command", ps],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+            path = (proc.stdout or "").strip().strip('"')
+            if path and os.path.isfile(path):
+                return path
+        except Exception:
+            pass
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception:
+        return ""
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        root.wm_attributes("-topmost", 1)
+    except Exception:
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+    try:
+        root.update()
+    except Exception:
+        pass
+    path = filedialog.askopenfilename(
+        parent=root,
+        title="Select image",
+        filetypes=[
+            ("Images", "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff"),
+            ("PNG", "*.png"),
+            ("JPEG", "*.jpg;*.jpeg"),
+            ("All files", "*.*"),
+        ],
+    )
+    try:
+        root.destroy()
+    except Exception:
+        pass
+    return path or ""
+
+
+@PromptServer.instance.routes.post("/minimaxutils/pick_image")
+async def minimaxutils_pick_image(_request):
+    """Open a native file picker and return the selected image path."""
+    try:
+        path = await asyncio.to_thread(_pick_image_dialog)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    if not path:
+        return web.json_response({"ok": False, "cancelled": True})
+    safe = _safe_image_path(path)
+    if not safe:
+        return web.json_response({"ok": False, "error": "not an image"}, status=400)
+    return web.json_response(
+        {
+            "ok": True,
+            "path": safe,
+            "name": os.path.basename(safe),
+            "directory": os.path.dirname(safe),
         }
     )
 

@@ -1,0 +1,4 @@
+core OK
+director OK category=MinimaxUtils/prompt keys=['SeamlessVideoStitcher', 'LoadImageFromDir', 'MinimaxPromptFromImage', 'MinimaxPromptFromText', 'MinimaxPromptCompiler', 'MinimaxPromptDirector']
+templates API OK
+final mappings: ['SeamlessVideoStitcher', 'LoadImageFromDir', 'MinimaxPromptFromImage', 'MinimaxPromptFromText', 'MinimaxPromptCompiler', 'MinimaxPromptDirector']
