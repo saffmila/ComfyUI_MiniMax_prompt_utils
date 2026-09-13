@@ -1,0 +1,11 @@
+{
+  "name": "object_hand",
+  "label": "Object / hand action",
+  "order": 3,
+  "slots": ["action", "object"],
+  "defaults": {
+    "action": "picks up",
+    "object": "the object in front of them"
+  },
+  "skeleton": "<Subject 1> {action} {object}, matching wardrobe and hands from <Picture 1>. The camera holds a static shot."
+}

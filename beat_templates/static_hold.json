@@ -1,0 +1,10 @@
+{
+  "name": "static_hold",
+  "label": "Static hold",
+  "order": 1,
+  "slots": ["action"],
+  "defaults": {
+    "action": "remains still and breathes naturally"
+  },
+  "skeleton": "The camera holds a static shot as <Subject 1> {action}. Appearance and clothing match <Picture 1>."
+}

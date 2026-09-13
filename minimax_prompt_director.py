@@ -80,6 +80,7 @@ def _default_beat() -> dict:
         "index": 0,
         "seed": 0,
         "pattern": "*.txt",
+        "template": "",
     }
 
 
@@ -164,6 +165,7 @@ def parse_state(raw) -> dict:
             except (TypeError, ValueError):
                 b["seed"] = 0
             b["pattern"] = _normalize_pattern(str(item.get("pattern", "*.txt") or "*.txt"))
+            b["template"] = str(item.get("template", "") or "")
             out_beats.append(b)
         if out_beats:
             base["beats"] = out_beats

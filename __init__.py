@@ -85,6 +85,14 @@ except Exception as e:
     _dbg(f"templates API FAILED: {e}")
     traceback.print_exc()
 
+try:
+    import beat_templates_api  # noqa: F401
+
+    _dbg("beat templates API OK")
+except Exception as e:
+    _dbg(f"beat templates API FAILED: {e}")
+    traceback.print_exc()
+
 WEB_DIRECTORY = "./web"
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]

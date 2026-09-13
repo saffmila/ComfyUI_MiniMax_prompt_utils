@@ -1,0 +1,11 @@
+{
+  "name": "look_turn",
+  "label": "Look / turn",
+  "order": 2,
+  "slots": ["from_what", "to_what"],
+  "defaults": {
+    "from_what": "their hands",
+    "to_what": "the far side of the frame"
+  },
+  "skeleton": "<Subject 1> lifts their gaze from {from_what} toward {to_what}, keeping identity and clothing from <Picture 1>. The camera holds a static shot."
+}

@@ -1,0 +1,10 @@
+{
+  "name": "push_to_detail",
+  "label": "Push to detail",
+  "order": 5,
+  "slots": ["detail"],
+  "defaults": {
+    "detail": "the object in <Subject 1>'s hands"
+  },
+  "skeleton": "The camera pushes in with small amplitude at slow speed toward {detail}. Appearance of <Subject 1> matches <Picture 1>."
+}

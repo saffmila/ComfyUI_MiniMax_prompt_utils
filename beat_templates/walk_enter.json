@@ -1,0 +1,10 @@
+{
+  "name": "walk_enter",
+  "label": "Walk / enter",
+  "order": 4,
+  "slots": ["side"],
+  "defaults": {
+    "side": "the left"
+  },
+  "skeleton": "<Subject 2> enters from {side} into the space established by <Picture 1>, walks to <Subject 1>, and stops beside them. Keep <Subject 1> matching <Picture 2> and <Subject 2> matching <Picture 3>. The camera holds a static shot."
+}

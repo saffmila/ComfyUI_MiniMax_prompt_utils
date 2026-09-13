@@ -7,3 +7,5 @@ Thumbs.db
 # Private templates — not shipped (never push)
 prompt_templates_local/**
 !prompt_templates_local/.gitkeep
+beat_templates_local/**
+!beat_templates_local/.gitkeep

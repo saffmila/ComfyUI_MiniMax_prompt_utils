@@ -32,12 +32,51 @@ function defaultBeat() {
         duration: 3.0,
         from_disk: false,
         text_unlocked: false,
+        template: "",
         directory: "",
         mode: "sequential",
         index: 0,
         seed: 0,
         pattern: "*.txt",
     };
+}
+
+function fillBeatSkeleton(skeleton, defaults = {}, overrides = {}) {
+    const values = { ...(defaults || {}), ...(overrides || {}) };
+    let text = String(skeleton || "").replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, (_, key) => {
+        const v = values[String(key).toLowerCase()];
+        return v != null ? String(v) : "";
+    });
+    text = text.replace(/[ \t]{2,}/g, " ").replace(/ +\n/g, "\n").trim();
+    return text;
+}
+
+async function fetchBeatTemplateList() {
+    const res = await api.fetchApi("/minimaxutils/beat_templates");
+    if (!res.ok) throw new Error(`beat_templates HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data?.ok) throw new Error(data?.error || "list failed");
+    return data.templates || [];
+}
+
+async function fetchBeatTemplate(name) {
+    const res = await api.fetchApi(`/minimaxutils/beat_templates/${encodeURIComponent(name)}`);
+    if (!res.ok) throw new Error(`beat template HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data?.ok || !data.template) throw new Error(data?.error || "load failed");
+    return data.template;
+}
+
+async function ensureBeatTemplateCatalog(node) {
+    if (Array.isArray(node._mmuBeatTemplates) && node._mmuBeatTemplates.length) {
+        return node._mmuBeatTemplates;
+    }
+    try {
+        node._mmuBeatTemplates = await fetchBeatTemplateList();
+    } catch (_) {
+        node._mmuBeatTemplates = [];
+    }
+    return node._mmuBeatTemplates;
 }
 
 function defaultState() {
@@ -923,6 +962,93 @@ function renderBeatCard(node, state, idx, container) {
     }, [""]);
     card.appendChild(status);
 
+    // Beat templates only in free-text mode (from disk owns the beat body).
+    if (!beat.from_disk) {
+        const tmplRow = el("div", {
+            style: {
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: "6px",
+                marginBottom: "6px",
+            },
+        });
+        tmplRow.appendChild(
+            el("span", {
+                style: { font: "11px Consolas,monospace", color: "#9aa0a6" },
+            }, ["template"]),
+        );
+        const tmplSel = el("select", {
+            style: {
+                flex: "1 1 160px",
+                minWidth: "140px",
+                background: "#12151a",
+                color: "#e8e8e8",
+                border: "1px solid #2a2a32",
+                borderRadius: "6px",
+                padding: "4px 8px",
+                font: "12px Consolas,monospace",
+            },
+        });
+        tmplSel.addEventListener("pointerdown", (e) => e.stopPropagation());
+        tmplSel.appendChild(el("option", { value: "" }, ["(none — free text)"]));
+        tmplRow.appendChild(tmplSel);
+        card.appendChild(tmplRow);
+
+        const applyBeatTemplate = async (name) => {
+            name = String(name || "").trim();
+            if (!name) {
+                const cur = readState(node);
+                if (!cur.beats[idx]) return;
+                cur.beats[idx].template = "";
+                writeState(node, cur);
+                status.style.color = "#8a9099";
+                status.textContent = "";
+                return;
+            }
+            try {
+                const tmpl = await fetchBeatTemplate(name);
+                const filled =
+                    tmpl.filled ||
+                    fillBeatSkeleton(tmpl.skeleton || "", tmpl.defaults || {});
+                const cur = readState(node);
+                if (!cur.beats[idx]) return;
+                cur.beats[idx].text = filled;
+                cur.beats[idx].template = name;
+                writeState(node, cur, { refresh: false });
+                if (ta) {
+                    ta.value = filled;
+                    ta._mmuColorSync?.();
+                }
+                status.style.color = "#8a9099";
+                status.textContent = `${tmpl.label || name} — edit free text / Pic chips as needed`;
+                refreshBeatSelectedThumbs(node, filled, selectedPane, { ta, beatIdx: idx });
+                schedulePreview(node);
+            } catch (err) {
+                status.textContent = `Template failed: ${err?.message || err}`;
+                status.style.color = "#ff6b6b";
+            }
+        };
+
+        tmplSel.addEventListener("change", () => {
+            applyBeatTemplate(tmplSel.value);
+        });
+
+        ensureBeatTemplateCatalog(node).then((templates) => {
+            const keep = String(beat.template || "").trim();
+            for (const t of templates || []) {
+                tmplSel.appendChild(
+                    el("option", { value: t.name }, [
+                        `${t.label || t.name}${t.source && t.source !== "pack" ? ` [${t.source}]` : ""}`,
+                    ]),
+                );
+            }
+            if (keep && [...tmplSel.options].some((o) => o.value === keep)) {
+                tmplSel.value = keep;
+            }
+        });
+    }
+
     if (beat.from_disk) {
         card.appendChild(diskControls(beat, { patternFallback: "*.txt" }, patch));
         const nav = el("div", { style: { display: "flex", gap: "6px", margin: "6px 0", alignItems: "center" } });
@@ -1005,7 +1131,7 @@ function renderBeatCard(node, state, idx, container) {
         {
             minHeight: 100,
             placeholder: canEdit
-                ? "action… click Pic N / move <Picture N> anywhere in the sentence"
+                ? "action… Apply a template, or type free text · Pic N inserts <Picture N>"
                 : "from disk — click Edit to change text / add Picture tags",
         },
     );
