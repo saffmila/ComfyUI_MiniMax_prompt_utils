@@ -1,0 +1,17 @@
+{
+  "name": "basic",
+  "label": "basic",
+  "skeleton": "subject_definitions:\n<Subject 1> is the main character defined by <Picture 1>{pic1}.\n<Picture 2> is the pose and composition reference for [Shot 1]{pic2}.\n<Picture 3> is the environment and lighting reference for the target scene{pic3}.\n\nsummary:\n[reference generation] <Subject 1> adopts the posture and framing from <Picture 2> within the environment of <Picture 3>.\n\nretention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - identity and clothing from <Picture 1> remain unchanged.\n<Picture 2> ([Shot 1] composition): fully_preserved - pose, camera angle, and framing from <Picture 2> are retained.\n<Picture 3> (environment): fully_preserved - room layout and lighting from <Picture 3> are retained.\n\ndetailed_description:\nCinematic, photorealistic style with sharp focus.\n[Shot 1] A single solitary person strictly in the frame (no other people present). Framing is {zoom}. <Subject 1> holds {pose}. The camera holds a static shot at {camera}, matching the composition of <Picture 2>. The environment from <Picture 3> remains solid and fully visible around the subject. {action} {env} {motion} {extra}\n\noverall_soundscape: Quiet indoor room ambience, subtle fabric rustle.\n\nnon_diegetic_music: N/A",
+  "slots": [
+    "pic1",
+    "pic2",
+    "pic3",
+    "zoom",
+    "pose",
+    "camera",
+    "action",
+    "env",
+    "motion",
+    "extra"
+  ]
+}

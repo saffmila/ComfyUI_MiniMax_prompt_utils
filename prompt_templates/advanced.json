@@ -1,0 +1,20 @@
+{
+  "name": "advanced",
+  "label": "advanced",
+  "slots": [
+    "pic1",
+    "pic2",
+    "pic3",
+    "pic4",
+    "pose",
+    "camera",
+    "zoom",
+    "env",
+    "action_setup",
+    "action_main",
+    "camera_move",
+    "motion",
+    "extra"
+  ],
+  "skeleton": "subject_definitions:\n<Subject 1> is the main character defined by <Picture 2>{pic2} (exact facial likeness) and <Picture 3>{pic3} (wardrobe and body reference).\n<Environment 1>: environment established in <Picture 1>{pic1}. {env}\n<Composition_Ref>: The camera angle, framing, and initial pose established in <Picture 4>{pic4} ({pose}; {camera}; {zoom}).\n\nsummary:\n[reference generation] <Subject 1> performs a short continuous action within the environment from <Environment 1>, starting from the camera angle defined in <Composition_Ref>. {action_setup} {action_main} {motion}\n\nretention_analysis:\n<Subject 1> facial likeness: fully_preserved from <Picture 2>.\n<Subject 1> wardrobe and body: fully_referenced from <Picture 3>.\n<Environment 1> (setting, lighting, surroundings): fully_preserved from <Picture 1>.\nCamera angle and initial pose: partially_preserved framing and perspective from <Composition_Ref> (<Picture 4>).\n\ndetailed_description:\nCinematic, live-action, high-quality film aesthetic.\n[Shot 1] The scene opens with the exact {camera} camera framing ({zoom}) established in <Composition_Ref>, where <Subject 1> is already positioned in {pose} within the environment from <Environment 1>. Preserving exact facial likeness from <Picture 2>, <Subject 1> begins with a small preparatory movement. {action_setup} {action_main} {camera_move} {extra}\n\noverall_soundscape:\nQuiet, neutral ambient sound of the environment. Soft fabric and footfall details match the on-screen motion. <Subject 1> does not speak.\n\nnon_diegetic_music:\nN/A\n"
+}

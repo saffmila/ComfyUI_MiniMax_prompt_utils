@@ -1,0 +1,15 @@
+[project]
+name = "comfyui-minimaxutils"
+version = "0.1.0"
+description = "Utilities for MiniMax / Hailuo video extension stitching in ComfyUI."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/saffmila/ComfyUI_MiniMax_prompt_utils"
+
+[tool.comfy]
+PublisherId = "saffm"
+DisplayName = "Comfyui-MinimaxUtils"
+Icon = ""

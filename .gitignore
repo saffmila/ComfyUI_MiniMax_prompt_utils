@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.DS_Store
+Thumbs.db
+
+# Private templates — not shipped (never push)
+prompt_templates_local/**
+!prompt_templates_local/.gitkeep
