@@ -200,13 +200,21 @@ def expand_sidecar_slots(raw: str, picture: int | None = None) -> dict[str, str]
         for key, val in pairs:
             if not val:
                 continue
-            if is_slot_name(key):
-                out.setdefault(key, val)
-            elif key in _DESC_ALIASES and picture:
+            key_l = key.strip().lower()
+            # description/desc/ref → picN when picture is set (before generic slot)
+            if key_l in _DESC_ALIASES and picture:
                 out.setdefault(f"pic{picture}", val)
+            elif is_slot_name(key_l):
+                out.setdefault(key_l, val)
 
     if picture:
         pic_key = f"pic{picture}"
+        # Remap aliases already stored as literal slot keys (e.g. description:)
+        for alias in _DESC_ALIASES:
+            if alias in out:
+                val = out.pop(alias)
+                if val:
+                    out.setdefault(pic_key, val)
         if pic_key not in out and not out and not pairs:
             free = " ".join(content_lines(text)).strip()
             if free:

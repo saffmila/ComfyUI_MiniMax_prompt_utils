@@ -797,6 +797,64 @@ function hideNativeSkeletonWidget(node) {
     }
 }
 
+/** Keep optional forceInput sockets in sync after code updates (no node recreate). */
+function syncMissingSlotInputs(node) {
+    const nodeData = node.constructor?.nodeData;
+    const optional = nodeData?.input?.optional || {};
+    if (!node.inputs) node.inputs = [];
+    for (const name of SLOT_INPUTS) {
+        if (node.inputs.some((i) => i.name === name)) continue;
+        const spec = optional[name];
+        const type = Array.isArray(spec) ? spec[0] : "STRING";
+        node.addInput(name, type);
+    }
+}
+
+function captureNamedWidgets(node) {
+    const out = {};
+    for (const w of node.widgets || []) {
+        if (!w?.name || w.serialize === false) continue;
+        if (w.name === "compiler_panel") continue;
+        out[w.name] = w.value;
+    }
+    return out;
+}
+
+function restoreNamedWidgets(node, named) {
+    if (!named || typeof named !== "object") return;
+    for (const [name, value] of Object.entries(named)) {
+        const w = widgetByName(node, name);
+        if (w) w.value = value;
+    }
+}
+
+function refreshCompilerNode(node) {
+    syncMissingSlotInputs(node);
+    // Panel can be wiped when Comfy re-applies widgets_values after onNodeCreated.
+    if (node._mmuCompilerPreview && !node.widgets?.includes(node._mmuCompilerPreview)) {
+        node._mmuCompilerPreview = null;
+        node._mmuCompilerRoot = null;
+        node._mmuSkeletonTa = null;
+        node._mmuCompilerPre = null;
+        node._mmuCompilerUiAttached = false;
+    }
+    attachCompilerUi(node);
+    ensurePanel(node);
+    hideNativeSkeletonWidget(node);
+    syncSkeletonToDom(node);
+    const sk = widgetByName(node, "skeleton");
+    if (sk && !String(sk.value || "").trim() && node._mmuSkeletonTa) {
+        // Empty after widget-index shift — reload active template body.
+        refreshTemplateList(node, { reloadBody: true });
+    } else {
+        refreshTemplateList(node, { reloadBody: false });
+    }
+    refreshColoredPreview(node);
+    clampNodeSize(node);
+    hookEmptyPlaceholder(node);
+    app.graph?.setDirtyCanvas?.(true, true);
+}
+
 function syncSkeletonFromDom(node) {
     const ta = node._mmuSkeletonTa;
     const w = widgetByName(node, "skeleton");
@@ -1191,6 +1249,14 @@ function makeToolButton(label, title) {
 }
 
 function ensurePanel(node) {
+    // Stale panel object after Comfy rebuilds widgets — must recreate.
+    if (node._mmuCompilerPreview && !node.widgets?.includes(node._mmuCompilerPreview)) {
+        node._mmuCompilerPreview = null;
+        node._mmuCompilerRoot = null;
+        node._mmuSkeletonTa = null;
+        node._mmuCompilerPre = null;
+    }
+
     if (node._mmuCompilerPreview) {
         moveWidgetToTop(node, node._mmuCompilerPreview);
         hideNativeSkeletonWidget(node);
@@ -1256,6 +1322,27 @@ function ensurePanel(node) {
         refreshTemplateList(node, { reloadBody: false });
     });
     templateRow.appendChild(refreshBtn);
+
+    const resyncBtn = makeToolButton(
+        "Resync",
+        "Rebuild panel + missing inputs after a code update (no need to recreate the node)",
+    );
+    resyncBtn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        node._mmuCompilerPreview = null;
+        node._mmuCompilerRoot = null;
+        node._mmuSkeletonTa = null;
+        node._mmuCompilerPre = null;
+        node._mmuCompilerUiAttached = false;
+        // Drop orphaned compiler_panel widgets from a previous attach.
+        if (node.widgets) {
+            node.widgets = node.widgets.filter((w) => w?.name !== "compiler_panel");
+        }
+        refreshCompilerNode(node);
+        setPreviewStatus(node, "Node resynced");
+    });
+    templateRow.appendChild(resyncBtn);
     root.appendChild(templateRow);
 
     const toolbar = document.createElement("div");
@@ -1419,23 +1506,29 @@ function hookEmptyPlaceholder(node) {
 }
 
 function attachCompilerUi(node) {
-    if (node._mmuCompilerUiAttached) return;
+    if (node._mmuCompilerUiAttached && node.widgets?.includes(node._mmuCompilerPreview)) {
+        return;
+    }
     node._mmuCompilerUiAttached = true;
+    syncMissingSlotInputs(node);
     ensurePanel(node);
     hookEmptyPlaceholder(node);
     clampNodeSize(node);
     node._mmuSlotColors = SLOT_COLORS;
 
     const prevResize = node.onResize;
-    node.onResize = function (size) {
-        const r = prevResize?.apply(this, arguments);
-        if (size?.[1] > NODE_MAX_H) {
-            size[1] = NODE_MAX_H;
-            if (this.size) this.size[1] = NODE_MAX_H;
-        }
-        hideNativeSkeletonWidget(this);
-        return r;
-    };
+    if (!node._mmuResizeHooked) {
+        node._mmuResizeHooked = true;
+        node.onResize = function (size) {
+            const r = prevResize?.apply(this, arguments);
+            if (size?.[1] > NODE_MAX_H) {
+                size[1] = NODE_MAX_H;
+                if (this.size) this.size[1] = NODE_MAX_H;
+            }
+            hideNativeSkeletonWidget(this);
+            return r;
+        };
+    }
 }
 
 app.registerExtension({
@@ -1451,16 +1544,27 @@ app.registerExtension({
             return r;
         };
 
+        const onSerialize = nodeType.prototype.onSerialize;
+        nodeType.prototype.onSerialize = function (o) {
+            onSerialize?.apply(this, arguments);
+            if (!o || typeof o !== "object") return;
+            o.mmu_widgets = captureNamedWidgets(this);
+            const tmpl = this.properties?.[TEMPLATE_PROP];
+            if (tmpl) o.mmu_template = tmpl;
+        };
+
         const onConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function () {
+        nodeType.prototype.onConfigure = function (info) {
             const r = onConfigure?.apply(this, arguments);
+            if (info?.mmu_widgets) restoreNamedWidgets(this, info.mmu_widgets);
+            if (info?.mmu_template) {
+                this.properties = this.properties || {};
+                this.properties[TEMPLATE_PROP] = info.mmu_template;
+            }
+            // Defer: Comfy may rebuild widgets after configure returns.
             requestAnimationFrame(() => {
-                ensurePanel(this);
-                hideNativeSkeletonWidget(this);
-                syncSkeletonToDom(this);
-                refreshColoredPreview(this);
-                clampNodeSize(this);
-                refreshTemplateList(this, { reloadBody: false });
+                refreshCompilerNode(this);
+                requestAnimationFrame(() => refreshCompilerNode(this));
             });
             return r;
         };
@@ -1502,6 +1606,12 @@ app.registerExtension({
     nodeCreated(node) {
         if (node?.comfyClass === NODE_NAME || node?.type === NODE_NAME) {
             attachCompilerUi(node);
+        }
+    },
+
+    loadedGraphNode(node) {
+        if (node?.comfyClass === NODE_NAME || node?.type === NODE_NAME) {
+            requestAnimationFrame(() => refreshCompilerNode(node));
         }
     },
 });

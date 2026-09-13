@@ -119,13 +119,19 @@ Preview colors injected fragments (pose / camera / …) and MiniMax `<Picture N>
 
 ### Minimax Prompt From Text
 
-Manual snippets **without** an image path — for parts not defined by a reference sidecar.
+Manual snippets **or** load from a folder of `.txt` files — same sequential / random / custom controls as Load Image From Dir.
 
 | Widget | Purpose |
 |--------|---------|
+| `from_disk` | Off = type in `prompt_text`; on = load from folder |
+| `directory` / `mode` / `index` / `seed` / `pattern` | Same as Load Image From Dir (default pattern `*.txt`) |
 | `slot` | Free STRING slot name (`action`, `action_main`, …); colors node + labels freeform for `bundle` |
 | `picture` | Bind text to MiniMax `<Picture N>` → fills `{picN}` (wins over `slot`) |
 | `extract_key` | `(all)` → bundle, or one slot name |
+
+Outputs: `snippet`, `filename`, `path`.
+
+**Dynamic prompts + photos:** use matching `mode` / `index` / `seed` on Load Image From Dir and Prompt From Text (`from_disk` on) so both advance together.
 
 ```
 action: watering plants with a garden hose
