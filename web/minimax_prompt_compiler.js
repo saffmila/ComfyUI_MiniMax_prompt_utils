@@ -167,13 +167,582 @@ function formatPicInsert(value) {
 function colorizeMinimaxLabels(html) {
     html = html.replace(/&lt;Picture (\d)&gt;/g, (full, n) => {
         const color = PICTURE_TAG_COLORS[Number(n)] || "#c0c0c0";
-        return `<span style="color:${color};font-weight:700;background:${color}22;border-radius:3px;padding:0 2px;" title="&lt;Picture ${n}&gt;">${full}</span>`;
+        return `<span class="mmu-pic-token" data-mmu-picture="${n}" style="color:${color};font-weight:700;background:${color}22;border-radius:3px;padding:0 2px;cursor:pointer;" title="&lt;Picture ${n}&gt; — hover for preview">${full}</span>`;
     });
     html = html.replace(/&lt;Subject (\d)&gt;/g, (full, n) => {
         const color = SUBJECT_TAG_COLORS[Number(n)] || "#c0c0c0";
         return `<span style="color:${color};font-weight:700;background:${color}22;border-radius:3px;padding:0 2px;" title="&lt;Subject ${n}&gt;">${full}</span>`;
     });
     return html;
+}
+
+/* —— Picture hover preview (floating popover, H3-style) —— */
+
+const IMAGE_EXT_RE = /\.(?:avif|bmp|gif|jpe?g|png|webp|tif|tiff|jfif)$/i;
+const VIDEO_EXT_RE = /\.(?:m4v|mkv|mov|mp4|webm)$/i;
+
+let _mmuPopoverStyleReady = false;
+
+function ensurePopoverStyle() {
+    if (_mmuPopoverStyleReady) return;
+    _mmuPopoverStyleReady = true;
+    const style = document.createElement("style");
+    style.textContent = `
+      .mmu-pic-popover { position:fixed; z-index:100000; width:min(360px,calc(100vw - 24px));
+        padding:9px; border-radius:8px; border:1px solid #3a3f4a; background:#12151a;
+        color:#e8e8e8; box-shadow:0 10px 28px rgba(0,0,0,.55); font:12px Consolas,monospace; }
+      .mmu-pic-popover[hidden] { display:none; }
+      .mmu-pic-popover-title { margin-bottom:6px; font-weight:700; }
+      .mmu-pic-popover-media { display:block; width:100%; max-height:240px; object-fit:contain;
+        border-radius:6px; background:#08090c; }
+      .mmu-pic-popover-detail { margin-top:6px; color:rgba(238,242,248,.62);
+        white-space:pre-wrap; overflow-wrap:anywhere; }
+      .mmu-pic-popover-muted { margin-top:4px; color:rgba(238,242,248,.45); }
+    `;
+    document.head.appendChild(style);
+}
+
+function basenamePath(path) {
+    const s = String(path || "").replaceAll("\\", "/");
+    const i = s.lastIndexOf("/");
+    return i >= 0 ? s.slice(i + 1) : s;
+}
+
+function filesystemPreviewUrl(path) {
+    if (!path) return null;
+    const qs = new URLSearchParams({
+        path: String(path),
+        preview: "webp;85",
+    });
+    return api.apiURL(`/minimaxutils/view?${qs.toString()}`);
+}
+
+function comfyViewUrl(filename, subfolder = "", type = "input") {
+    const qs = new URLSearchParams({
+        filename: String(filename),
+        subfolder: String(subfolder || ""),
+        type: String(type || "input"),
+    });
+    return api.apiURL(`/view?${qs.toString()}`);
+}
+
+function widgetMediaAsset(value) {
+    if (value && typeof value === "object" && value.filename) {
+        return {
+            filename: String(value.filename),
+            subfolder: String(value.subfolder ?? ""),
+            type: String(value.type ?? "input"),
+        };
+    }
+    let text = typeof value === "string" ? value.trim() : "";
+    if (!text) return null;
+    if (/^(?:blob:|data:|https?:|\/api\/view\?|\/view\?)/i.test(text)) {
+        return { url: text };
+    }
+    let type = "input";
+    const annotated = text.match(/\s+\[(input|output|temp)\]\s*$/i);
+    if (annotated) {
+        type = annotated[1].toLowerCase();
+        text = text.slice(0, annotated.index).trim();
+    }
+    text = text.replaceAll("\\", "/").replace(/^\/+/, "");
+    const isImage = IMAGE_EXT_RE.test(text);
+    const isVideo = VIDEO_EXT_RE.test(text);
+    if (!isImage && !isVideo) return null;
+    const slash = text.lastIndexOf("/");
+    return {
+        filename: slash >= 0 ? text.slice(slash + 1) : text,
+        subfolder: slash >= 0 ? text.slice(0, slash) : "",
+        type,
+        kind: isVideo ? "video" : "image",
+    };
+}
+
+function previewFromGraphNode(node) {
+    if (!node) return null;
+
+    if (node.imgs?.[0]) {
+        const rendered = node.imgs[0];
+        const src = typeof rendered === "string" ? rendered : rendered?.src;
+        if (src) {
+            return {
+                url: src,
+                kind: "image",
+                label: basenamePath(node._mmuLastPath) || node.title || nodeTypeName(node),
+                source: node,
+            };
+        }
+    }
+
+    if (node._mmuLastPath) {
+        return {
+            url: filesystemPreviewUrl(node._mmuLastPath),
+            kind: "image",
+            label: basenamePath(node._mmuLastPath),
+            source: node,
+            path: node._mmuLastPath,
+        };
+    }
+
+    for (const name of ["image_path", "path", "filename", "image", "video", "file"]) {
+        const raw = widgetByName(node, name)?.value;
+        if (raw == null || raw === "") continue;
+        if (typeof raw === "string") {
+            const text = raw.trim();
+            // Absolute / UNC filesystem path → MinimaxUtils view endpoint.
+            if (
+                IMAGE_EXT_RE.test(text) &&
+                (/^[A-Za-z]:[\\/]/.test(text) || text.startsWith("/") || text.startsWith("\\\\"))
+            ) {
+                return {
+                    url: filesystemPreviewUrl(text),
+                    kind: "image",
+                    label: basenamePath(text),
+                    source: node,
+                    path: text,
+                };
+            }
+        }
+        const asset = widgetMediaAsset(raw);
+        if (!asset) continue;
+        if (asset.url) {
+            const kind =
+                VIDEO_EXT_RE.test(asset.url) || /video/i.test(name) ? "video" : "image";
+            return { url: asset.url, kind, label: basenamePath(asset.url), source: node };
+        }
+        return {
+            url: comfyViewUrl(asset.filename, asset.subfolder, asset.type),
+            kind: asset.kind || "image",
+            label: asset.filename,
+            source: node,
+        };
+    }
+
+    for (const widget of node.widgets || []) {
+        if (["image_path", "path", "filename", "image", "video", "file"].includes(widget.name)) {
+            continue;
+        }
+        const asset = widgetMediaAsset(widget.value);
+        if (!asset) continue;
+        if (asset.url) {
+            return {
+                url: asset.url,
+                kind: asset.kind || "image",
+                label: basenamePath(asset.url),
+                source: node,
+            };
+        }
+        return {
+            url: comfyViewUrl(asset.filename, asset.subfolder, asset.type),
+            kind: asset.kind || "image",
+            label: asset.filename,
+            source: node,
+        };
+    }
+    return null;
+}
+
+function nodeTypeName(node) {
+    return node?.comfyClass || node?.type || "node";
+}
+
+function graphLink(graph, linkId) {
+    if (linkId == null) return null;
+    return graph?.links?.[linkId] ?? app.graph?.links?.[linkId] ?? null;
+}
+
+function inputSourceNode(node, name) {
+    const input = (node?.inputs || []).find((item) => item.name === name);
+    if (!input || input.link == null) return null;
+    const link = graphLink(node.graph, input.link);
+    if (!link) return null;
+    return (
+        node.graph?.getNodeById?.(link.origin_id) ||
+        app.graph?.getNodeById?.(link.origin_id) ||
+        null
+    );
+}
+
+function outputTargetNodes(node) {
+    const targets = [];
+    for (const output of node?.outputs || []) {
+        for (const linkId of output.links || []) {
+            const link = graphLink(node.graph, linkId);
+            if (!link) continue;
+            const target =
+                node.graph?.getNodeById?.(link.target_id) ||
+                app.graph?.getNodeById?.(link.target_id);
+            if (target) targets.push(target);
+        }
+    }
+    return targets;
+}
+
+const REF2VA_NODE_TYPES = new Set([
+    "MiniMaxH3ReferenceToVideo",
+    "MiniMaxH3ScheduledReferenceToVideo",
+    "MiniMaxH3TaggedReferenceToVideo",
+    "MiniMaxH3CurrentTaggedReferenceScene",
+]);
+const IMAGE_TO_VIDEO_TYPES = new Set(["MiniMaxH3ImageToVideo"]);
+
+function walkUpstreamMedia(start) {
+    const queue = [start];
+    const seen = new Set();
+    while (queue.length) {
+        const candidate = queue.shift();
+        if (!candidate || seen.has(candidate)) continue;
+        seen.add(candidate);
+        const hit = previewFromGraphNode(candidate);
+        if (hit?.url) return hit;
+        for (const input of candidate.inputs || []) {
+            if (input.link == null) continue;
+            const link = graphLink(candidate.graph, input.link);
+            const parent = link
+                ? candidate.graph?.getNodeById?.(link.origin_id) ||
+                  app.graph?.getNodeById?.(link.origin_id)
+                : null;
+            if (parent) queue.push(parent);
+        }
+    }
+    return null;
+}
+
+async function resolveMediaFromNode(start) {
+    if (!start) return null;
+    const queue = [start];
+    const seen = new Set();
+    while (queue.length) {
+        const candidate = queue.shift();
+        if (!candidate || seen.has(candidate)) continue;
+        seen.add(candidate);
+        if (isLoadImageFromDir(candidate)) {
+            const media = await resolveLoaderPreview(candidate);
+            if (media?.url) return media;
+        }
+        const hit = previewFromGraphNode(candidate);
+        if (hit?.url) return hit;
+        for (const input of candidate.inputs || []) {
+            if (input.link == null) continue;
+            const link = graphLink(candidate.graph, input.link);
+            const parent = link
+                ? candidate.graph?.getNodeById?.(link.origin_id) ||
+                  app.graph?.getNodeById?.(link.origin_id)
+                : null;
+            if (parent) queue.push(parent);
+        }
+    }
+    return null;
+}
+
+async function resolveLoaderPreview(loaderNode) {
+    const cached = previewFromGraphNode(loaderNode);
+    if (cached?.url) return cached;
+    const path = await resolveLoaderPath(loaderNode);
+    if (!path) return null;
+    return {
+        url: filesystemPreviewUrl(path),
+        kind: "image",
+        label: basenamePath(path),
+        source: loaderNode,
+        path,
+    };
+}
+
+async function resolvePromptFromImageMedia(pfnNode) {
+    let imagePath = String(widgetByName(pfnNode, "image_path")?.value || "").trim();
+    if (!imagePath) {
+        const upstream = inputSourceNode(pfnNode, "image_path");
+        if (upstream) {
+            if (isLoadImageFromDir(upstream)) return resolveLoaderPreview(upstream);
+            const walked = await resolveMediaFromNode(upstream);
+            if (walked?.url) return walked;
+            imagePath =
+                String(widgetByName(upstream, "path")?.value || "").trim() ||
+                String(upstream._mmuLastPath || "");
+        }
+    }
+    if (imagePath && IMAGE_EXT_RE.test(imagePath)) {
+        return {
+            url: filesystemPreviewUrl(imagePath),
+            kind: "image",
+            label: basenamePath(imagePath),
+            source: pfnNode,
+            path: imagePath,
+        };
+    }
+    return resolveMediaFromNode(pfnNode);
+}
+
+function isPromptFromImage(node) {
+    return node?.comfyClass === PROMPT_FROM_IMAGE || node?.type === PROMPT_FROM_IMAGE;
+}
+
+function isLoadImageFromDir(node) {
+    return node?.comfyClass === LOAD_IMAGE_FROM_DIR || node?.type === LOAD_IMAGE_FROM_DIR;
+}
+
+function collectUpstreamNodes(start) {
+    const out = [];
+    const queue = [start];
+    const seen = new Set();
+    while (queue.length) {
+        const candidate = queue.shift();
+        if (!candidate || seen.has(candidate)) continue;
+        seen.add(candidate);
+        if (candidate !== start) out.push(candidate);
+        for (const input of candidate.inputs || []) {
+            if (input.link == null) continue;
+            const link = graphLink(candidate.graph, input.link);
+            const parent = link
+                ? candidate.graph?.getNodeById?.(link.origin_id) ||
+                  app.graph?.getNodeById?.(link.origin_id)
+                : null;
+            if (parent) queue.push(parent);
+        }
+    }
+    return out;
+}
+
+function findDownstreamRefConsumer(start) {
+    const queue = [start];
+    const seen = new Set();
+    let fallback = null;
+    while (queue.length) {
+        const node = queue.shift();
+        if (!node || seen.has(node)) continue;
+        seen.add(node);
+        if (node !== start) {
+            const t = nodeTypeName(node);
+            if (REF2VA_NODE_TYPES.has(t) || IMAGE_TO_VIDEO_TYPES.has(t)) return node;
+            const hasRefImage = (node.inputs || []).some((input) =>
+                /ref_image_\d+/i.test(String(input.name || "")),
+            );
+            if (hasRefImage && !fallback) fallback = node;
+        }
+        queue.push(...outputTargetNodes(node));
+    }
+    return fallback;
+}
+
+function refImageInputSource(refNode, pictureNum) {
+    const index = pictureNum - 1;
+    const preferred = [
+        `ref_images.ref_image_${index}`,
+        `ref_image_${index}`,
+    ];
+    for (const name of preferred) {
+        const src = inputSourceNode(refNode, name);
+        if (src) return src;
+    }
+    for (const input of refNode?.inputs || []) {
+        const match = String(input.name || "").match(/ref_image_(\d+)$/i);
+        if (!match || input.link == null) continue;
+        if (Number(match[1]) !== index) continue;
+        return inputSourceNode(refNode, input.name);
+    }
+    const t = nodeTypeName(refNode);
+    if (IMAGE_TO_VIDEO_TYPES.has(t)) {
+        if (pictureNum === 1) return inputSourceNode(refNode, "first_frame");
+        if (pictureNum === 2) return inputSourceNode(refNode, "last_frame");
+    }
+    return null;
+}
+
+async function resolvePictureMedia(compilerNode, pictureNum) {
+    const n = Number(pictureNum);
+    if (!(n >= 1 && n <= 9)) return null;
+
+    // 1) Real MiniMax <Picture N> images live on the downstream REF2VA node.
+    const refNode = findDownstreamRefConsumer(compilerNode);
+    if (refNode) {
+        const source = refImageInputSource(refNode, n);
+        const media = await resolveMediaFromNode(source);
+        if (media?.url) return media;
+    }
+
+    // 2) PromptFromImage.picture=N or slot=picN anywhere upstream of the compiler.
+    const upstream = collectUpstreamNodes(compilerNode);
+    for (const node of upstream) {
+        if (!isPromptFromImage(node)) continue;
+        const pic = String(widgetByName(node, "picture")?.value || "").trim();
+        if (pic !== String(n)) continue;
+        const media = await resolvePromptFromImageMedia(node);
+        if (media?.url) return media;
+    }
+    for (const node of upstream) {
+        if (!isPromptFromImage(node)) continue;
+        const slot = String(widgetByName(node, "slot")?.value || "")
+            .trim()
+            .toLowerCase();
+        if (slot !== `pic${n}`) continue;
+        const media = await resolvePromptFromImageMedia(node);
+        if (media?.url) return media;
+    }
+
+    // 3) Compiler.picN text socket (and whatever image path sits behind it).
+    const picUpstream = linkedNode(compilerNode, `pic${n}`);
+    if (picUpstream) {
+        if (isPromptFromImage(picUpstream)) {
+            const media = await resolvePromptFromImageMedia(picUpstream);
+            if (media?.url) return media;
+        }
+        const media = await resolveMediaFromNode(picUpstream);
+        if (media?.url) return media;
+    }
+
+    return null;
+}
+
+function ensurePicturePopover(node) {
+    ensurePopoverStyle();
+    if (node._mmuPicPopover) return node._mmuPicPopover;
+    const popover = document.createElement("div");
+    popover.className = "mmu-pic-popover";
+    popover.hidden = true;
+    popover.addEventListener("mouseenter", () => {
+        if (node._mmuPicPopoverTimer != null) {
+            window.clearTimeout(node._mmuPicPopoverTimer);
+            node._mmuPicPopoverTimer = null;
+        }
+    });
+    popover.addEventListener("mouseleave", () => scheduleHidePicturePopover(node));
+    for (const eventName of [
+        "pointerdown",
+        "pointerup",
+        "mousedown",
+        "mouseup",
+        "click",
+        "dblclick",
+        "wheel",
+    ]) {
+        popover.addEventListener(eventName, (ev) => ev.stopPropagation());
+    }
+    document.body.appendChild(popover);
+    node._mmuPicPopover = popover;
+    return popover;
+}
+
+function hidePicturePopover(node) {
+    if (node._mmuPicPopoverTimer != null) {
+        window.clearTimeout(node._mmuPicPopoverTimer);
+        node._mmuPicPopoverTimer = null;
+    }
+    const popover = node._mmuPicPopover;
+    if (!popover) return;
+    for (const media of popover.querySelectorAll("audio,video")) {
+        try {
+            media.pause?.();
+        } catch (_) {}
+    }
+    popover.hidden = true;
+}
+
+function scheduleHidePicturePopover(node) {
+    if (node._mmuPicPopoverTimer != null) window.clearTimeout(node._mmuPicPopoverTimer);
+    node._mmuPicPopoverTimer = window.setTimeout(() => {
+        node._mmuPicPopoverTimer = null;
+        hidePicturePopover(node);
+    }, 180);
+}
+
+function positionPicturePopover(popover, anchor) {
+    popover.hidden = false;
+    const rect = anchor.getBoundingClientRect();
+    const width = Math.min(360, globalThis.innerWidth - 24);
+    const left = Math.max(12, Math.min(globalThis.innerWidth - width - 12, rect.left));
+    popover.style.left = `${left}px`;
+    popover.style.top = `${Math.max(
+        12,
+        Math.min(globalThis.innerHeight - popover.offsetHeight - 12, rect.bottom + 7),
+    )}px`;
+}
+
+async function showPicturePopover(node, pictureNum, anchor) {
+    if (!anchor) return;
+    if (node._mmuPicPopoverTimer != null) {
+        window.clearTimeout(node._mmuPicPopoverTimer);
+        node._mmuPicPopoverTimer = null;
+    }
+    const popover = ensurePicturePopover(node);
+    const title = document.createElement("div");
+    title.className = "mmu-pic-popover-title";
+    title.textContent = `<Picture ${pictureNum}>`;
+    const detail = document.createElement("div");
+    detail.className = "mmu-pic-popover-detail";
+    detail.textContent = "Resolving reference…";
+    popover.replaceChildren(title, detail);
+    positionPicturePopover(popover, anchor);
+
+    node._mmuPicPopoverSeq = (node._mmuPicPopoverSeq || 0) + 1;
+    const token = node._mmuPicPopoverSeq;
+
+    let media = null;
+    try {
+        media = await resolvePictureMedia(node, pictureNum);
+    } catch (_) {
+        media = null;
+    }
+    if (node._mmuPicPopoverSeq !== token) return;
+
+    popover.replaceChildren();
+    const title2 = document.createElement("div");
+    title2.className = "mmu-pic-popover-title";
+    title2.textContent = `<Picture ${pictureNum}>`;
+    popover.appendChild(title2);
+
+    if (media?.url) {
+        const kind = media.kind === "video" ? "video" : "image";
+        const el = document.createElement(kind === "image" ? "img" : "video");
+        el.className = "mmu-pic-popover-media";
+        el.src = media.url;
+        if (kind === "image") {
+            el.alt = `Preview for <Picture ${pictureNum}>`;
+            el.addEventListener("load", () => positionPicturePopover(popover, anchor), {
+                once: true,
+            });
+        } else {
+            el.controls = true;
+            el.preload = "metadata";
+            el.muted = true;
+        }
+        popover.appendChild(el);
+        const info = document.createElement("div");
+        info.className = "mmu-pic-popover-detail";
+        const srcName = media.label || nodeTypeName(media.source);
+        info.textContent = `${kind.toUpperCase()} · ${srcName}`;
+        popover.appendChild(info);
+    } else {
+        const muted = document.createElement("div");
+        muted.className = "mmu-pic-popover-muted";
+        muted.textContent =
+            "No image for this Picture. Connect Load Image → MiniMax ref_image_" +
+            (Number(pictureNum) - 1) +
+            ", or Prompt From Image (picture=" +
+            pictureNum +
+            ") with a path.";
+        popover.appendChild(muted);
+    }
+    positionPicturePopover(popover, anchor);
+}
+
+function bindPictureHoverTargets(node, root) {
+    if (!root) return;
+    for (const el of root.querySelectorAll("[data-mmu-picture]")) {
+        if (el._mmuPicHoverBound) continue;
+        el._mmuPicHoverBound = true;
+        el.addEventListener("mouseenter", () => {
+            const n = Number(el.getAttribute("data-mmu-picture"));
+            if (n >= 1 && n <= 9) showPicturePopover(node, n, el);
+        });
+        el.addEventListener("mouseleave", () => scheduleHidePicturePopover(node));
+    }
+}
+
+function destroyPicturePopover(node) {
+    hidePicturePopover(node);
+    node._mmuPicPopover?.remove?.();
+    node._mmuPicPopover = null;
 }
 
 function renderColoredPrompt(skeleton, filled, emptyPlaceholder) {
@@ -260,6 +829,7 @@ function refreshColoredPreview(node) {
             node._mmuLastPrompt,
             node._mmuLastFilled || {},
         );
+        bindPictureHoverTargets(node, pre);
         return;
     }
     const skeleton =
@@ -268,6 +838,7 @@ function refreshColoredPreview(node) {
     const empty = String(widgetByName(node, "empty_placeholder")?.value || "");
     const map = node._mmuLastFilled || {};
     pre.innerHTML = renderColoredPrompt(skeleton, map, empty);
+    bindPictureHoverTargets(node, pre);
 }
 
 /** Highlight injected slot values + MiniMax <Picture>/<Subject> labels. */
@@ -293,9 +864,13 @@ function colorizeCompiledPrompt(prompt, filled) {
 function linkedNode(node, inputName) {
     const input = (node.inputs || []).find((i) => i.name === inputName);
     if (!input || input.link == null) return null;
-    const link = app.graph?.links?.[input.link];
+    const link = graphLink(node.graph, input.link);
     if (!link) return null;
-    return app.graph.getNodeById(link.origin_id) || null;
+    return (
+        node.graph?.getNodeById?.(link.origin_id) ||
+        app.graph?.getNodeById?.(link.origin_id) ||
+        null
+    );
 }
 
 async function resolveLoaderPath(loaderNode) {
@@ -587,8 +1162,15 @@ function refreshSlotLegend(node) {
         chip.textContent = name;
         chip.title = `{${name}}`;
         chip.style.cssText = `color:${color};border:1px solid ${color}66;border-radius:999px;padding:1px 7px;`;
+        const picMatch = /^pic([1-9])$/.exec(name);
+        if (picMatch) {
+            chip.dataset.mmuPicture = picMatch[1];
+            chip.style.cursor = "pointer";
+            chip.title = `{${name}} — hover for <Picture ${picMatch[1]}> preview`;
+        }
         legend.appendChild(chip);
     }
+    bindPictureHoverTargets(node, legend);
 }
 
 function makeToolButton(label, title) {
@@ -908,6 +1490,12 @@ app.registerExtension({
                 ctx.arc(pos[0] - this.pos[0], pos[1] - this.pos[1], 4, 0, Math.PI * 2);
                 ctx.fill();
             }
+        };
+
+        const onRemoved = nodeType.prototype.onRemoved;
+        nodeType.prototype.onRemoved = function () {
+            destroyPicturePopover(this);
+            return onRemoved?.apply(this, arguments);
         };
     },
 
